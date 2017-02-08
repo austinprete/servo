@@ -132,6 +132,7 @@ pub struct Element {
     class_list: MutNullableJS<DOMTokenList>,
     state: Cell<ElementState>,
     atomic_flags: AtomicElementFlags,
+    cached_lang: DOMRefCell<Option<String>>,
 }
 
 impl fmt::Debug for Element {
@@ -220,6 +221,7 @@ impl Element {
             class_list: Default::default(),
             state: Cell::new(state),
             atomic_flags: AtomicElementFlags::new(),
+            cached_lang: DOMRefCell::new(None),
         }
     }
 
@@ -348,6 +350,7 @@ pub trait LayoutElementHelpers {
     fn style_attribute(&self) -> *const Option<Arc<RwLock<PropertyDeclarationBlock>>>;
     fn local_name(&self) -> &LocalName;
     fn namespace(&self) -> &Namespace;
+    fn language(&self) -> String;
     fn get_checked_state_for_layout(&self) -> bool;
     fn get_indeterminate_state_for_layout(&self) -> bool;
     fn get_state_for_layout(&self) -> ElementState;
@@ -683,6 +686,14 @@ impl LayoutElementHelpers for LayoutJS<Element> {
     fn namespace(&self) -> &Namespace {
         unsafe {
             &(*self.unsafe_get()).namespace
+        }
+    }
+
+    #[inline]
+    #[allow(unsafe_code)]
+    fn language(&self) -> String {
+        unsafe {
+            (*self.unsafe_get()).get_lang()
         }
     }
 
@@ -2354,6 +2365,8 @@ impl<'a> ::selectors::Element for Root<Element> {
                 }
             },
 
+            NonTSPseudoClass::Lang(ref lang) => self.get_lang() == *lang,
+
             NonTSPseudoClass::ReadOnly =>
                 !Element::state(self).contains(pseudo_class.state_flag()),
 
@@ -2556,6 +2569,28 @@ impl Element {
         }
         // Step 7
         self.set_click_in_progress(false);
+    }
+
+    pub fn get_lang(&self) -> String {
+        if let Some(ref lang) = *self.cached_lang.borrow() {
+            lang.clone()
+        } else if let Some(attr) = self.get_attribute(&ns!(xml), &local_name!("lang")) {
+            let lang = String::from(attr.Value());
+            *self.cached_lang.borrow_mut() = Some(lang.clone());
+            lang
+        } else if let Some(attr) = self.get_attribute(&ns!(), &local_name!("lang")) {
+            let lang = String::from(attr.Value());
+            *self.cached_lang.borrow_mut() = Some(lang.clone());
+            lang
+        } else {
+            let lang = self.upcast::<Node>().GetParentElement().map(|el| el.get_lang()).unwrap_or_else(|| {
+                // TODO: Check meta tags for a pragma-set default language
+                // TODO: Check HTTP Content-Language header
+                String::new()
+            });
+            *self.cached_lang.borrow_mut() = Some(lang.clone());
+            lang
+        }
     }
 
     pub fn state(&self) -> ElementState {
